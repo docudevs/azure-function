@@ -1,0 +1,36 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "functionAppName": {
+            "value": "docudevs-function-app"
+        },
+        "location": {
+            "value": "eastus"
+        },
+        "storageAccountName": {
+            "value": "docudevsstorage"
+        },
+        "createStorageAccount": {
+            "value": true
+        },
+        "docudevsBaseUrl": {
+            "value": "https://api.docudevs.ai"
+        },
+        "docudevsApiKey": {
+            "value": "<insert-api-key-or-remove-when-using-secret-uri>"
+        },
+        "docudevsApiKeySecretUri": {
+            "value": ""
+        },
+        "inContainerName": {
+            "value": "in"
+        },
+        "outContainerName": {
+            "value": "out"
+        },
+        "defaultConfigFolder": {
+            "value": "__default__"
+        }
+    }
+}

@@ -1,0 +1,334 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "functionAppName": {
+            "type": "string",
+            "metadata": {
+                "description": "Name of the Function App to create."
+            }
+        },
+        "location": {
+            "type": "string",
+            "defaultValue": "[resourceGroup().location]",
+            "metadata": {
+                "description": "Azure region for all resources."
+            }
+        },
+        "storageAccountName": {
+            "type": "string",
+            "metadata": {
+                "description": "Name of the storage account containing the in/out containers."
+            }
+        },
+        "createStorageAccount": {
+            "type": "bool",
+            "defaultValue": true,
+            "metadata": {
+                "description": "Set to true to create the storage account; false to use an existing account in this resource group."
+            }
+        },
+        "docudevsBaseUrl": {
+            "type": "string",
+            "defaultValue": "https://api.docudevs.ai",
+            "metadata": {
+                "description": "Base URL for the DocuDevs API."
+            }
+        },
+        "docudevsApiKey": {
+            "type": "secureString",
+            "defaultValue": "",
+            "metadata": {
+                "description": "DocuDevs API key. Leave blank when using Key Vault reference."
+            }
+        },
+        "docudevsApiKeySecretUri": {
+            "type": "string",
+            "defaultValue": "",
+            "metadata": {
+                "description": "Optional Key Vault secret URI containing the DocuDevs API key."
+            }
+        },
+        "inContainerName": {
+            "type": "string",
+            "defaultValue": "in",
+            "metadata": {
+                "description": "Name of the container monitored for incoming documents and configuration."
+            }
+        },
+        "outContainerName": {
+            "type": "string",
+            "defaultValue": "out",
+            "metadata": {
+                "description": "Name of the container used for processed DocuDevs output."
+            }
+        },
+        "defaultConfigFolder": {
+            "type": "string",
+            "defaultValue": "__default__",
+            "metadata": {
+                "description": "Folder providing fallback configuration."
+            }
+        },
+        "appInsightsName": {
+            "type": "string",
+            "defaultValue": "[concat(parameters('functionAppName'), '-ai')]",
+            "metadata": {
+                "description": "Application Insights resource name."
+            }
+        }
+    },
+    "variables": {
+        "planName": "[concat(parameters('functionAppName'), '-plan')]",
+        "storageAccountId": "[if(parameters('createStorageAccount'), resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')))]",
+        "blobEndpoint": "[concat('https://', parameters('storageAccountName'), '.blob.core.windows.net')]",
+        "queueEndpoint": "[concat('https://', parameters('storageAccountName'), '.queue.core.windows.net')]",
+        "docApiKeySetting": "[if(equals(parameters('docudevsApiKeySecretUri'), ''), parameters('docudevsApiKey'), concat('@Microsoft.KeyVault(SecretUri=', parameters('docudevsApiKeySecretUri'), ')'))]"
+    },
+    "resources": [
+        {
+            "type": "Microsoft.Storage/storageAccounts",
+            "apiVersion": "2023-05-01",
+            "name": "[parameters('storageAccountName')]",
+            "condition": "[parameters('createStorageAccount')]",
+            "location": "[parameters('location')]",
+            "kind": "StorageV2",
+            "sku": {
+                "name": "Standard_LRS"
+            },
+            "properties": {
+                "supportsHttpsTrafficOnly": true,
+                "allowBlobPublicAccess": false,
+                "allowSharedKeyAccess": false,
+                "minimumTlsVersion": "TLS1_2"
+            }
+        },
+        {
+            "type": "Microsoft.Insights/components",
+            "apiVersion": "2020-02-02",
+            "name": "[parameters('appInsightsName')]",
+            "location": "[parameters('location')]",
+            "kind": "web",
+            "properties": {
+                "Application_Type": "web"
+            }
+        },
+        {
+            "type": "Microsoft.Web/serverfarms",
+            "apiVersion": "2022-09-01",
+            "name": "[variables('planName')]",
+            "location": "[parameters('location')]",
+            "kind": "functionapp",
+            "sku": {
+                "name": "FC1",
+                "tier": "FlexConsumption"
+            },
+            "properties": {
+                "reserved": false,
+                "perSiteScaling": false
+            }
+        },
+        {
+            "type": "Microsoft.Web/sites",
+            "apiVersion": "2022-09-01",
+            "name": "[parameters('functionAppName')]",
+            "location": "[parameters('location')]",
+            "kind": "functionapp,linux",
+            "identity": {
+                "type": "SystemAssigned"
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Web/serverfarms', variables('planName'))]",
+                "[resourceId('Microsoft.Insights/components', parameters('appInsightsName'))]",
+                "[if(parameters('createStorageAccount'), resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), ''))]"
+            ],
+            "properties": {
+                "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('planName'))]",
+                "httpsOnly": true,
+                "clientAffinityEnabled": false,
+                "siteConfig": {
+                    "linuxFxVersion": "Python|3.11",
+                    "appSettings": [
+                        {
+                            "name": "FUNCTIONS_WORKER_RUNTIME",
+                            "value": "python"
+                        },
+                        {
+                            "name": "FUNCTIONS_EXTENSION_VERSION",
+                            "value": "~4"
+                        },
+                        {
+                            "name": "WEBSITE_RUN_FROM_PACKAGE",
+                            "value": "1"
+                        },
+                        {
+                            "name": "AzureWebJobsStorage__accountName",
+                            "value": "[parameters('storageAccountName')]"
+                        },
+                        {
+                            "name": "AzureWebJobsStorage__blobServiceUri",
+                            "value": "[variables('blobEndpoint')]"
+                        },
+                        {
+                            "name": "AzureWebJobsStorage__queueServiceUri",
+                            "value": "[variables('queueEndpoint')]"
+                        },
+                        {
+                            "name": "AzureWebJobsStorage__credential",
+                            "value": "managedidentity"
+                        },
+                        {
+                            "name": "STORAGE_ACCOUNT_URL",
+                            "value": "[concat(variables('blobEndpoint'), '/')]"
+                        },
+                        {
+                            "name": "IN_CONTAINER_NAME",
+                            "value": "[parameters('inContainerName')]"
+                        },
+                        {
+                            "name": "OUT_CONTAINER_NAME",
+                            "value": "[parameters('outContainerName')]"
+                        },
+                        {
+                            "name": "DEFAULT_CONFIG_FOLDER",
+                            "value": "[parameters('defaultConfigFolder')]"
+                        },
+                        {
+                            "name": "DOCUDEVS_BASE_URL",
+                            "value": "[parameters('docudevsBaseUrl')]"
+                        },
+                        {
+                            "name": "DOCUDEVS_API_KEY",
+                            "value": "[variables('docApiKeySetting')]"
+                        },
+                        {
+                            "name": "APPINSIGHTS_INSTRUMENTATIONKEY",
+                            "value": "[reference(resourceId('Microsoft.Insights/components', parameters('appInsightsName')), '2020-02-02').InstrumentationKey]"
+                        },
+                        {
+                            "name": "APPLICATIONINSIGHTS_CONNECTION_STRING",
+                            "value": "[reference(resourceId('Microsoft.Insights/components', parameters('appInsightsName')), '2020-02-02').ConnectionString]"
+                        }
+                    ]
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Authorization/roleAssignments",
+            "apiVersion": "2022-04-01",
+            "name": "[guid(variables('storageAccountId'), 'blob-data-contributor')]",
+            "scope": "[variables('storageAccountId')]",
+            "dependsOn": [
+                "[resourceId('Microsoft.Web/sites', parameters('functionAppName'))]"
+            ],
+            "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')]",
+                "principalId": "[reference(resourceId('Microsoft.Web/sites', parameters('functionAppName')), '2022-09-01', 'Full').identity.principalId]"
+            }
+        },
+        {
+            "type": "Microsoft.Authorization/roleAssignments",
+            "apiVersion": "2022-04-01",
+            "name": "[guid(variables('storageAccountId'), 'queue-data-contributor')]",
+            "scope": "[variables('storageAccountId')]",
+            "dependsOn": [
+                "[resourceId('Microsoft.Web/sites', parameters('functionAppName'))]"
+            ],
+            "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '974c5e8b-45b9-4653-ba55-5f855dd0fb88')]",
+                "principalId": "[reference(resourceId('Microsoft.Web/sites', parameters('functionAppName')), '2022-09-01', 'Full').identity.principalId]"
+            }
+        },
+        {
+            "type": "Microsoft.EventGrid/eventSubscriptions",
+            "apiVersion": "2022-06-15",
+            "name": "[concat(parameters('functionAppName'), '-config-sub')]",
+            "scope": "[variables('storageAccountId')]",
+            "dependsOn": [
+                "[resourceId('Microsoft.Web/sites', parameters('functionAppName'))]"
+            ],
+            "properties": {
+                "destination": {
+                    "endpointType": "AzureFunction",
+                    "properties": {
+                        "resourceId": "[resourceId('Microsoft.Web/sites/functions', parameters('functionAppName'), 'handle_config_update')]"
+                    }
+                },
+                "includedEventTypes": [
+                    "Microsoft.Storage.BlobCreated",
+                    "Microsoft.Storage.BlobDeleted"
+                ],
+                "advancedFilters": [
+                    {
+                        "operatorType": "StringBeginsWith",
+                        "key": "subject",
+                        "values": [
+                            "[concat('/blobServices/default/containers/', parameters('inContainerName'), '/blobs/')]"
+                        ]
+                    },
+                    {
+                        "operatorType": "StringEndsWith",
+                        "key": "subject",
+                        "values": [
+                            "/params.json",
+                            "/schema.json",
+                            "/metadata.json"
+                        ]
+                    }
+                ],
+                "deliveryWithResourceIdentity": {
+                    "identity": {
+                        "type": "SystemAssigned"
+                    }
+                }
+            }
+        },
+        {
+            "type": "Microsoft.EventGrid/eventSubscriptions",
+            "apiVersion": "2022-06-15",
+            "name": "[concat(parameters('functionAppName'), '-ingest-sub')]",
+            "scope": "[variables('storageAccountId')]",
+            "dependsOn": [
+                "[resourceId('Microsoft.Web/sites', parameters('functionAppName'))]"
+            ],
+            "properties": {
+                "destination": {
+                    "endpointType": "AzureFunction",
+                    "properties": {
+                        "resourceId": "[resourceId('Microsoft.Web/sites/functions', parameters('functionAppName'), 'handle_document_ingest')]"
+                    }
+                },
+                "includedEventTypes": [
+                    "Microsoft.Storage.BlobCreated"
+                ],
+                "advancedFilters": [
+                    {
+                        "operatorType": "StringBeginsWith",
+                        "key": "subject",
+                        "values": [
+                            "[concat('/blobServices/default/containers/', parameters('inContainerName'), '/blobs/')]"
+                        ]
+                    },
+                    {
+                        "operatorType": "StringNotEndsWith",
+                        "key": "subject",
+                        "values": [
+                            ".json"
+                        ]
+                    }
+                ],
+                "deliveryWithResourceIdentity": {
+                    "identity": {
+                        "type": "SystemAssigned"
+                    }
+                }
+            }
+        }
+    ],
+    "outputs": {
+        "functionAppPortalLink": {
+            "type": "string",
+            "value": "[concat('https://portal.azure.com/#resource', resourceId('Microsoft.Web/sites', parameters('functionAppName')))]"
+        }
+    }
+}

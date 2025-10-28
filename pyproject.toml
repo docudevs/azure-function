@@ -1,0 +1,28 @@
+[project]
+name = "docudevs-functions"
+version = "0.1.0"
+description = "Azure Function app for DocuDevs blob processing."
+requires-python = ">=3.11"
+dependencies = [
+    "azure-functions",
+    "azure-identity",
+    "azure-storage-blob",
+    "azure-core",
+    "attrs>=23.1.0",
+    "docu-devs-api-client",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "pytest-asyncio",
+    "pip"
+]
+
+dynamic = ["readme"]
+
+[tool.uv]
+index-strategy = "unsafe-first-match"
+
+[tool.uv.sources]
+"docu-devs-api-client" = { path = "../docudevs-sdk", editable = true }
