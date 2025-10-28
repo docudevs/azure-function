@@ -18,9 +18,11 @@ class FakeDocuDevsResponse:
 
 
 class FakeDocuDevsClient:
-    def __init__(self) -> None:
+    def __init__(self, wait_result: Any | None = None) -> None:
         self.upload_calls = []
         self.process_calls = []
+        self.wait_calls = []
+        self._wait_result = wait_result if wait_result is not None else {"result": "ok", "guid": "job-123"}
 
     async def upload_document(self, body: Any) -> FakeDocuDevsResponse:
         payload = body.document.payload  # type: ignore[attr-defined]
@@ -30,7 +32,26 @@ class FakeDocuDevsClient:
 
     async def process_document(self, guid: str, body: Any) -> FakeDocuDevsResponse:
         self.process_calls.append({"guid": guid, "body": body.to_dict()})
-        return FakeDocuDevsResponse(status_code=200, payload={"result": "ok", "guid": guid})
+        return FakeDocuDevsResponse(status_code=202, payload={"status": "accepted", "guid": guid})
+
+    async def wait_until_ready(
+        self,
+        guid: str,
+        timeout: int = 180,
+        poll_interval: float = 5.0,
+        result_format: str | None = None,
+        excel_save_to: str | None = None,
+    ) -> Any:
+        self.wait_calls.append(
+            {
+                "guid": guid,
+                "timeout": timeout,
+                "poll_interval": poll_interval,
+                "result_format": result_format,
+                "excel_save_to": excel_save_to,
+            }
+        )
+        return self._wait_result
 
 
 class FakeStorage:
@@ -95,7 +116,12 @@ def patch_doc_sdk(monkeypatch: pytest.MonkeyPatch) -> None:
             return cls(dict(payload))
 
         def to_dict(self) -> Dict[str, Any]:
-            return dict(self._payload)
+            payload = dict(self._payload)
+            if self.schema is not dummy_unset:
+                payload["schema"] = self.schema
+            if self.additional_properties:
+                payload.update(self.additional_properties)
+            return payload
 
     monkeypatch.setattr(
         processor_module,
@@ -122,10 +148,56 @@ async def test_process_document_writes_result(storage: FakeStorage) -> None:
     assert outcome == ProcessingOutcome.SUCCESS
     assert client.upload_calls  # upload called
     assert client.process_calls[0]["guid"] == "job-123"
+    assert client.wait_calls  # waited for result
+    assert client.wait_calls[0]["result_format"] is None
+    serialized_schema = client.process_calls[0]["body"]["schema"]
+    assert isinstance(serialized_schema, str)
+    assert json.loads(serialized_schema) == {"type": "object"}
     output_key = "out/folder/document.pdf.json"
     assert output_key in storage.recorded_writes
     written = storage.recorded_writes[output_key]
     assert json.loads(written.data) == {"result": "ok", "guid": "job-123"}
+    assert written.content_type == "application/json"
+
+
+@pytest.mark.asyncio
+async def test_process_document_respects_result_format(storage: FakeStorage) -> None:
+    storage._objects["in/folder/params.json"] = StorageObject(
+        data=json.dumps(
+            {
+                "prompt": "hello",
+                "mimeType": "application/pdf",
+                "resultFormat": "csv",
+                "resultTimeoutSeconds": 30,
+                "resultPollIntervalSeconds": 2.5,
+            }
+        ).encode(),
+        content_type="application/json",
+        etag="etag-params",
+    )
+    store = ConfigurationStore(storage=storage, container_name="in")
+    client = FakeDocuDevsClient(wait_result="column\nvalue\n")
+    processor = DocumentProcessor(
+        doc_client=client,
+        storage=storage,
+        config_store=store,
+        input_container="in",
+        output_container="out",
+    )
+
+    outcome = await processor.process_blob("folder/document.pdf")
+
+    assert outcome == ProcessingOutcome.SUCCESS
+    assert client.wait_calls
+    wait_call = client.wait_calls[0]
+    assert wait_call["result_format"] == "csv"
+    assert wait_call["timeout"] == 30
+    assert wait_call["poll_interval"] == pytest.approx(2.5)
+    output_key = "out/folder/document.pdf.csv"
+    assert output_key in storage.recorded_writes
+    written = storage.recorded_writes[output_key]
+    assert written.content_type == "text/csv"
+    assert written.data.decode("utf-8") == "column\nvalue\n"
 
 
 @pytest.mark.asyncio

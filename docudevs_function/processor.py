@@ -32,6 +32,16 @@ class DocuDevsClient(Protocol):  # pragma: no cover - protocol only
     async def process_document(self, guid: str, body: "UploadCommand") -> Any:
         ...
 
+    async def wait_until_ready(
+        self,
+        guid: str,
+        timeout: int = 180,
+        poll_interval: float = 5.0,
+        result_format: Optional[str] = None,
+        excel_save_to: Optional[str] = None,
+    ) -> Any:
+        ...
+
 
 class ProcessingOutcome(Enum):
     SUCCESS = "success"
@@ -64,8 +74,8 @@ class DocumentProcessor:
                 raise FileNotFoundError(f"Blob '{blob_name}' not found in container '{self._input_container}'")
             folder = blob_path.parent
             config = self._config_store.resolve(folder)
-            response = await self._upload_and_process(blob_path, document, config)
-            self._write_success(blob_name, response)
+            payload, extension, content_type = await self._upload_and_process(blob_path, document, config)
+            self._write_success(blob_name, payload, extension, content_type)
             return ProcessingOutcome.SUCCESS
         except Exception as exc:
             LOGGER.exception("Failed to process blob %s", blob_name, exc_info=exc)
@@ -87,7 +97,16 @@ class DocumentProcessor:
         guid = self._extract_guid(upload_response)
         upload_command = self._build_command(config, mime_type)
         process_response = await self._doc_client.process_document(guid=guid, body=upload_command)
-        return self._serialize_response(process_response)
+        status_code = getattr(process_response, "status_code", None)
+        if status_code is not None and status_code >= 400:
+            payload = self._serialize_response(process_response).decode("utf-8", errors="replace")
+            raise RuntimeError(f"DocuDevs process_document failed ({status_code}): {payload}")
+
+        wait_format, wait_kwargs = self._resolve_wait_parameters(config.params)
+        result = await self._wait_for_completion(guid, wait_format, wait_kwargs)
+        payload = self._serialize_result(result, wait_format)
+        extension, content_type = self._resolve_output_descriptor(wait_format)
+        return payload, extension, content_type
 
     def _resolve_mime_type(self, config: FolderConfiguration, document: StorageObject) -> str:
         params_mime = self._lookup_param(config.params, "mimeType") or self._lookup_param(config.params, "mime_type")
@@ -109,10 +128,45 @@ class DocumentProcessor:
         params.setdefault("mimeType", mime_type)
         command = upload_command_cls.from_dict(params)
         if (command.schema is unset or command.schema is None) and config.schema is not None:
-            command.schema = config.schema
+            command.schema = (
+                json.dumps(config.schema, separators=(",", ":"))
+                if isinstance(config.schema, (dict, list))
+                else str(config.schema)
+            )
         if config.metadata is not None:
             command.additional_properties.setdefault("metadata", config.metadata)
         return command
+
+    def _resolve_wait_parameters(self, params: dict) -> tuple[Optional[str], dict[str, Any]]:
+        result_format = self._lookup_param(params, "resultFormat")
+        normalized_format: Optional[str] = None
+        if isinstance(result_format, str):
+            candidate = result_format.strip().lower()
+            if candidate in {"json", "csv", "excel"}:
+                normalized_format = candidate
+            else:
+                LOGGER.warning("Ignoring unsupported result format '%s'", result_format)
+
+        timeout_raw = (
+            self._lookup_param(params, "resultTimeoutSeconds")
+            or self._lookup_param(params, "resultTimeout")
+        )
+        timeout = self._coerce_positive_int(timeout_raw)
+
+        poll_raw = (
+            self._lookup_param(params, "resultPollIntervalSeconds")
+            or self._lookup_param(params, "resultPollInterval")
+        )
+        poll_interval = self._coerce_positive_float(poll_raw)
+
+        wait_kwargs: dict[str, Any] = {}
+        if timeout is not None:
+            wait_kwargs["timeout"] = timeout
+        if poll_interval is not None:
+            wait_kwargs["poll_interval"] = poll_interval
+        if normalized_format is not None:
+            wait_kwargs["result_format"] = normalized_format
+        return normalized_format, wait_kwargs
 
     def _extract_guid(self, response: Any) -> str:
         parsed = getattr(response, "parsed", None)
@@ -153,13 +207,37 @@ class DocumentProcessor:
             return json.dumps(parsed).encode("utf-8")
         return json.dumps({k: v for k, v in vars(parsed).items() if not k.startswith("_")}).encode("utf-8")
 
-    def _write_success(self, blob_name: str, payload: bytes) -> None:
-        target_name = f"{blob_name}.json"
+    async def _wait_for_completion(self, guid: str, result_format: Optional[str], wait_kwargs: dict[str, Any]) -> Any:
+        # `result_format` already propagated into wait_kwargs (when supported), but we retain it to simplify testing hooks
+        return await self._doc_client.wait_until_ready(guid=guid, **wait_kwargs)
+
+    def _serialize_result(self, result: Any, result_format: Optional[str]) -> bytes:
+        if isinstance(result, (bytes, bytearray)):
+            return bytes(result)
+        if isinstance(result, str):
+            return result.encode("utf-8")
+        if hasattr(result, "to_dict"):
+            return json.dumps(result.to_dict()).encode("utf-8")
+        if isinstance(result, (dict, list)):
+            return json.dumps(result).encode("utf-8")
+        if hasattr(result, "__dict__"):
+            return json.dumps({k: v for k, v in vars(result).items() if not k.startswith("_")}).encode("utf-8")
+        return json.dumps(result, default=str).encode("utf-8")
+
+    def _resolve_output_descriptor(self, result_format: Optional[str]) -> tuple[str, str]:
+        if result_format == "csv":
+            return "csv", "text/csv"
+        if result_format == "excel":
+            return "xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        return "json", "application/json"
+
+    def _write_success(self, blob_name: str, payload: bytes, extension: str, content_type: str) -> None:
+        target_name = f"{blob_name}.{extension}"
         self._storage.put_object(
             self._output_container,
             target_name,
             data=payload,
-            content_type="application/json",
+            content_type=content_type,
             etag=self._generate_etag(),
         )
 
@@ -181,3 +259,23 @@ class DocumentProcessor:
         if self._doc_sdk is None:
             self._doc_sdk = _import_doc_sdk()
         return self._doc_sdk
+
+    def _coerce_positive_int(self, value: Any) -> Optional[int]:
+        if value is None:
+            return None
+        try:
+            coerced = int(value)
+        except (TypeError, ValueError):
+            LOGGER.warning("Unable to coerce timeout value '%s' to int", value)
+            return None
+        return coerced if coerced > 0 else None
+
+    def _coerce_positive_float(self, value: Any) -> Optional[float]:
+        if value is None:
+            return None
+        try:
+            coerced = float(value)
+        except (TypeError, ValueError):
+            LOGGER.warning("Unable to coerce poll interval value '%s' to float", value)
+            return None
+        return coerced if coerced > 0 else None

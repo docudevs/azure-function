@@ -173,3 +173,5 @@ vite.config.ts.timestamp-*
 .azure
 .vscode
 local.settings.json
+ltodistus.pdf
+schema.json

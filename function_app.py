@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import PurePosixPath
-from typing import Tuple
+from typing import Any, Tuple
 from urllib.parse import unquote
 
 import azure.functions as func
@@ -98,3 +99,20 @@ def _delete_consolidated_config(folder: PurePosixPath) -> None:
         blob_client.delete_blob(delete_snapshots="include")
     except Exception as exc:  # pragma: no cover - best effort cleanup
         LOGGER.debug("Unable to delete consolidated config %s: %s", blob_name, exc)
+
+
+def _coalesce_str(*values: Any) -> str | None:
+    for value in values:
+        if isinstance(value, str):
+            trimmed = value.strip()
+            if trimmed:
+                return trimmed
+    return None
+
+
+def _json_response(payload: dict[str, Any], *, status_code: int) -> func.HttpResponse:
+    return func.HttpResponse(
+        json.dumps(payload, separators=(",", ":")),
+        status_code=status_code,
+        mimetype="application/json",
+    )

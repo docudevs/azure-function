@@ -1,5 +1,5 @@
 {
     "prompt": "Extract invoice data",
-    "schema": "{}",
-    "mimeType": "application/pdf"
+    "ocr": "DEFAULT",
+    "llm": "MINI"
 }

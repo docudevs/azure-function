@@ -7,7 +7,7 @@ from functools import lru_cache
 from azure.identity import DefaultAzureCredential
 from azure.storage.blob import BlobServiceClient
 
-from docudevs_client import DocuDevsClient
+from docudevs.docudevs_client import DocuDevsClient
 
 from .azure_storage import AzureBlobStorage
 from .configuration import ConfigurationStore
