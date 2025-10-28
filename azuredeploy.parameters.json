@@ -24,10 +24,10 @@
             "value": ""
         },
         "inContainerName": {
-            "value": "in"
+            "value": "din"
         },
         "outContainerName": {
-            "value": "out"
+            "value": "dout"
         },
         "defaultConfigFolder": {
             "value": "__default__"
