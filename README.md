@@ -22,7 +22,7 @@ If you are looking for contributor or maintenance notes, see `DEVELOPMENT.md`.
 2. Provide your DocuDevs API key (or a Key Vault reference) and choose the storage account you want the function to monitor.
 3. Complete the deployment to create the Function App, identity, Event Grid subscriptions, and supporting resources.
 
-[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fpiizei%2Fdocudevs%2Fmain%2Ffunction%2Fazuredeploy.json)
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fdocudevs%2Fazure-function%2Fmain%2Fazuredeploy.json)
 
 Prefer infrastructure-as-code? Use the included `azuredeploy.json` ARM template with your own parameters. The function can also be packaged and published through your existing CI/CD pipeline.
 
