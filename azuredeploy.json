@@ -10,7 +10,7 @@
         },
         "location": {
             "type": "string",
-            "defaultValue": "swedencentral",
+            "defaultValue": "[resourceGroup().location]",
             "metadata": {
                 "description": "Azure region for all resources."
             }
@@ -122,7 +122,7 @@
         },
         {
             "type": "Microsoft.Web/serverfarms",
-            "apiVersion": "2022-09-01",
+            "apiVersion": "2024-04-01",
             "name": "[variables('planName')]",
             "location": "[parameters('location')]",
             "kind": "functionapp",
@@ -131,8 +131,7 @@
                 "tier": "FlexConsumption"
             },
             "properties": {
-                "reserved": false,
-                "perSiteScaling": false
+                "reserved": true
             }
         },
         {
