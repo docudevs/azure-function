@@ -49,16 +49,23 @@
                 "description": "Optional Key Vault secret URI containing the DocuDevs API key."
             }
         },
+        "packageUrl": {
+            "type": "string",
+            "defaultValue": "https://publicfunctiondist.blob.core.windows.net/distribution/docudevs-function.zip",
+            "metadata": {
+                "description": "Public URL to the function package zip consumed via WEBSITE_RUN_FROM_PACKAGE."
+            }
+        },
         "inContainerName": {
             "type": "string",
-            "defaultValue": "in",
+            "defaultValue": "din",
             "metadata": {
                 "description": "Name of the container monitored for incoming documents and configuration."
             }
         },
         "outContainerName": {
             "type": "string",
-            "defaultValue": "out",
+            "defaultValue": "dout",
             "metadata": {
                 "description": "Name of the container used for processed DocuDevs output."
             }
@@ -159,7 +166,7 @@
                         },
                         {
                             "name": "WEBSITE_RUN_FROM_PACKAGE",
-                            "value": "1"
+                            "value": "[parameters('packageUrl')]"
                         },
                         {
                             "name": "AzureWebJobsStorage__accountName",
